@@ -115,7 +115,7 @@ void uart_init() {
     UBRR0H = (ubrr >> 8); 
     UBRR0L = ubrr;
     UCSR0B = (1 << TXEN0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // making this comment to test git
 }
 
 void uart_send(char c) {
