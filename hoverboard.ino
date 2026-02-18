@@ -135,22 +135,22 @@ void uart_print_int(int val) {
 
 // ADC init
 void adc_init() {
-    ADMUX = (1 << REFS0);  // AVcc reference, channel 0 (A0)
-    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // enable, prescaler 128
+    ADMUX = (1 << REFS0);  
+    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); 
 }
 
 uint16_t adc_read() {
-    ADCSRA |= (1 << ADSC);           // start conversion
-    while (ADCSRA & (1 << ADSC));    // wait until done
+    ADCSRA |= (1 << ADSC);           
+    while (ADCSRA & (1 << ADSC));    
     return ADC;
 }
 
-// PWM init on OC2A (PB3, pin 11)
+// PWM initialize (PB3, pin 11)
 void pwm_init() {
-    DDRB |= (1 << PB3);              // PB3 as output
-    TCCR2A = (1 << COM2A1) | (1 << WGM21) | (1 << WGM20); // non-inverting fast PWM
-    TCCR2B = (1 << CS21);            // prescaler 8
-    OCR2A = 0;                        // start at 0
+    DDRB |= (1 << PB3);              
+    TCCR2A = (1 << COM2A1) | (1 << WGM21) | (1 << WGM20); 
+    TCCR2B = (1 << CS21);            
+    OCR2A = 0;                       
 }
 
 void pwm_set(uint8_t val) {
@@ -184,7 +184,7 @@ int main() {
 
         int brightness = map_val(adc, DIST_14CM, DIST_42CM, 0, 255);
         brightness = constrain_val(brightness, 0, 255);
-        pwm_set(255 - brightness);  // active low
+        pwm_set(255 - brightness);  
 
         uart_print("Brightness: ");
         uart_print_int(brightness);
@@ -362,8 +362,8 @@ void pwm_set(uint8_t val) {
 // TRIG = PB5 (pin 13), ECHO = PB0 (pin 8)
 long pulse_in() {
     // Send 10us trigger pulse
-    DDRB |= (1 << PB5);           // TRIG as output
-    DDRB &= ~(1 << PB0);          // ECHO as input
+    DDRB |= (1 << PB5);          
+    DDRB &= ~(1 << PB0);         
 
     PORTB &= ~(1 << PB5);
     _delay_us(2);
@@ -376,11 +376,11 @@ long pulse_in() {
 
     // Count microseconds while ECHO is HIGH
     TCNT1 = 0;
-    TCCR1B = (1 << CS11);         // prescaler 8, 0.5us per tick at 16MHz
+    TCCR1B = (1 << CS11);         
     while (PINB & (1 << PB0));
-    TCCR1B = 0;                   // stop timer
+    TCCR1B = 0;                   
 
-    return TCNT1 / 2;             // convert ticks to microseconds
+    return TCNT1 / 2;             
 }
 
 // map function
