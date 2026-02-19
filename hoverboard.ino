@@ -13,31 +13,6 @@ void loop() {
 
 // SECTION DONE
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // GETTING THE IR SENSOR TO WORK
 /* 
 #define DIST_14CM 450       // set the max ADC for 14 cm
@@ -65,186 +40,6 @@ void loop() {
 */
 
 // SECTION DONE
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// GETTING THE IR SENSOR TO WORK WITH C
-
-/**/
-#include <avr/io.h>        // renames registers to PORTB, etc, so we don't need to use hex to find em
-#include <util/delay.h>    // allows handy delay function
-#include <stdio.h>         // allows sprintf(__) which converts number to a string. Helps w/ printing out ADC etc
-
-#define F_CPU 16000000UL   // This is like initializing but uses no RAM and acts as constant
-#define BAUD 9600
-#define DIST_14CM 380
-#define DIST_42CM 140
-
-// UART init                // allows the arduino to communicate w/ computer and then w/ the serial monitor to show ADC etc THRU THE USB
-void uart_init() {
-    uint16_t ubrr = F_CPU / 16 / BAUD - 1; // the computer and arduino must match bits per second
-    UBRR0H = (ubrr >> 8); 
-    UBRR0L = ubrr;
-    UCSR0B = (1 << TXEN0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // making this comment to test git
-}
-
-void uart_send(char c) {
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = c;
-}
-
-void uart_print(const char* s) {
-    while (*s) uart_send(*s++);
-}
-
-void uart_print_int(int val) {
-    char buf[10];
-    sprintf(buf, "%d\r\n", val);
-    uart_print(buf);
-}
-
-// ADC init
-void adc_init() {
-    ADMUX = (1 << REFS0);  
-    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); 
-}
-
-uint16_t adc_read() {
-    ADCSRA |= (1 << ADSC);           
-    while (ADCSRA & (1 << ADSC));    
-    return ADC;
-}
-
-// PWM initialize (PB3, pin 11)
-void pwm_init() {
-    DDRB |= (1 << PB3);              
-    TCCR2A = (1 << COM2A1) | (1 << WGM21) | (1 << WGM20); 
-    TCCR2B = (1 << CS21);            
-    OCR2A = 0;                       
-}
-
-void pwm_set(uint8_t val) {
-    OCR2A = val;
-}
-
-// map function
-int map_val(int x, int in_min, int in_max, int out_min, int out_max) {
-    return (long)(x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
-// constrain
-int constrain_val(int x, int lo, int hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
-}
-
-int main() {
-    uart_init();
-    adc_init();
-    pwm_init();
-
-    
-
-    while (1) {
-        uint16_t adc = adc_read();
-
-        // Map ADC to distance in cm (ADC 380 = 14cm, ADC 140 = 42cm)
-        int distance_cm = map_val(adc, DIST_14CM, DIST_42CM, 14, 42);
-        distance_cm = constrain_val(distance_cm, 14, 42);
-        uart_print("Distance (cm): ");
-        uart_print_int(distance_cm);
-
-      
-        uart_print("ADC: ");
-        uart_print_int(adc);
-
-        int brightness = map_val(adc, DIST_14CM, DIST_42CM, 0, 255);
-        brightness = constrain_val(brightness, 0, 255);
-        pwm_set(255 - brightness);  
-
-        uart_print("Brightness: ");
-        uart_print_int(brightness);
-
-        // Flash LED L if outside [d1, d2] range
-        // Outside range = ADC > DIST_14CM or ADC < DIST_42CM
-        if (adc > DIST_14CM || adc < DIST_42CM) {
-            PORTB |= (1 << PB5);   // ON
-            _delay_ms(500);
-            PORTB &= ~(1 << PB5);  // OFF
-            _delay_ms(500);
-        } else {
-            PORTB &= ~(1 << PB5);  // keep off inside range
-        }
-    }
-}
-
-
-// SECTION DONE
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // GETTING THE US SENSOR TO WORK.
 /*
@@ -285,40 +80,138 @@ void loop() {
 // SECTION DONE
 
 
+/////////CHOOSE WHICH SENSOR TO RUN////////////////////
+//#define IRC
+#define USSC
+////////////////////////////////////////////////////////
+
+// GETTING THE IR SENSOR TO WORK WITH C
+
+#ifdef IRC
+#include <avr/io.h>      // renames registers to PORTB, etc, so we don't need to use hex to find em
+#include <util/delay.h>  // allows handy delay function
+#include <stdio.h>       // allows sprintf(__) which converts number to a string. Helps w/ printing out ADC etc
+
+#define F_CPU 16000000UL  // This is like initializing but uses no RAM and acts as constant
+#define BAUD 9600
+#define DIST_14CM 380
+#define DIST_42CM 140
+
+// UART init                // allows the arduino to communicate w/ computer and then w/ the serial monitor to show ADC etc THRU THE USB
+void uart_init() {
+  uint16_t ubrr = F_CPU / 16 / BAUD - 1;  // the computer and arduino must match bits per second
+  UBRR0H = (ubrr >> 8);
+  UBRR0L = ubrr;
+  UCSR0B = (1 << TXEN0);
+  UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);  // making this comment to test git
+}
+
+void uart_send(char c) {
+  while (!(UCSR0A & (1 << UDRE0)))
+    ;
+  UDR0 = c;
+}
+
+void uart_print(const char* s) {
+  while (*s) uart_send(*s++);
+}
+
+void uart_print_int(int val) {
+  char buf[10];
+  sprintf(buf, "%d\r\n", val);
+  uart_print(buf);
+}
+
+// ADC init
+void adc_init() {
+  ADMUX = (1 << REFS0);
+  ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+uint16_t adc_read() {
+  ADCSRA |= (1 << ADSC);
+  while (ADCSRA & (1 << ADSC))
+    ;
+  return ADC;
+}
+
+// PWM initialize (PB3, pin 11)
+void pwm_init() {
+  DDRB |= (1 << PB3);
+  TCCR2A = (1 << COM2A1) | (1 << WGM21) | (1 << WGM20);
+  TCCR2B = (1 << CS21);
+  OCR2A = 0;
+}
+
+void pwm_set(uint8_t val) {
+  OCR2A = val;
+}
+
+// map function
+int map_val(int x, int in_min, int in_max, int out_min, int out_max) {
+  return (long)(x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// constrain
+int constrain_val(int x, int lo, int hi) {
+  if (x < lo) return lo;
+  if (x > hi) return hi;
+  return x;
+}
+
+int main() {
+  uart_init();
+  adc_init();
+  pwm_init();
+
+
+
+  while (1) {
+    uint16_t adc = adc_read();
+
+    // Map ADC to distance in cm (ADC 380 = 14cm, ADC 140 = 42cm)
+    int distance_cm = map_val(adc, DIST_14CM, DIST_42CM, 14, 42);
+    distance_cm = constrain_val(distance_cm, 14, 42);
 
 
 
 
+    int brightness = map_val(adc, DIST_14CM, DIST_42CM, 0, 255);
+    brightness = constrain_val(brightness, 0, 255);
+    pwm_set(255 - brightness);
+
+    uart_print("===========IN RANGE===========");
+    uart_print_int(0); 
+    uart_print("Distance (cm): ");
+    uart_print_int(distance_cm);
+    uart_print("Brightness: ");
+    uart_print_int(brightness);
+    uart_print("ADC: ");
+    uart_print_int(adc);
+
+    // Flash LED L if outside [d1, d2] range
+    // Outside range = ADC > DIST_14CM or ADC < DIST_42CM
+    if (adc > DIST_14CM || adc < DIST_42CM) {
+
+    uart_print("===========OUT OF RANGE===========");
+    uart_print_int(0);      
+      PORTB |= (1 << PB5);  // ON
+      _delay_ms(500);
+      PORTB &= ~(1 << PB5);  // OFF
+      _delay_ms(500);
+    } else {
+      PORTB &= ~(1 << PB5);  // keep off inside range
+    }
+  }
+}
+#endif
+
+// SECTION DONE
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
+#ifdef USSC
 // GETTING THE US SENSOR TO WORK WITH C
 #include <avr/io.h>
 #include <util/delay.h>
@@ -326,121 +219,136 @@ void loop() {
 
 #define F_CPU 16000000UL
 #define BAUD 9600
-#define DIST_14CM 710    // ~14cm in microseconds
-#define DIST_42CM 2436   // ~42cm in microseconds
+#define DIST_14CM 710   // ~14cm in microseconds
+#define DIST_42CM 2436  // ~42cm in microseconds
 
 // UART init
 void uart_init() {
-    uint16_t ubrr = F_CPU / 16 / BAUD - 1;
-    UBRR0H = (ubrr >> 8);
-    UBRR0L = ubrr;
-    UCSR0B = (1 << TXEN0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+  uint16_t ubrr = F_CPU / 16 / BAUD - 1;
+  UBRR0H = (ubrr >> 8);
+  UBRR0L = ubrr;
+  UCSR0B = (1 << TXEN0);
+  UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
 
 void uart_send(char c) {
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = c;
+  while (!(UCSR0A & (1 << UDRE0)))
+    ;
+  UDR0 = c;
 }
 
 void uart_print(const char* s) {
-    while (*s) uart_send(*s++);
+  while (*s) uart_send(*s++);
 }
 
 void uart_print_int(long val) {
-    char buf[12];
-    sprintf(buf, "%ld\r\n", val);
-    uart_print(buf);
+  char buf[12];
+  sprintf(buf, "%ld\r\n", val);
+  uart_print(buf);
 }
 
 // PWM init on OC2A (PB3, pin 11)
 void pwm_init() {
-    DDRB |= (1 << PB3);
-    TCCR2A = (1 << COM2A1) | (1 << WGM21) | (1 << WGM20);
-    TCCR2B = (1 << CS21);
-    OCR2A = 0;
+  DDRB |= (1 << PB3);
+  TCCR2A = (1 << COM2A1) | (1 << WGM21) | (1 << WGM20);
+  TCCR2B = (1 << CS21);
+  OCR2A = 0;
 }
 
 void pwm_set(uint8_t val) {
-    OCR2A = val;
+  OCR2A = val;
 }
 
 // Pulse measurement using Timer1
 // TRIG = PB5 (pin 13), ECHO = PB0 (pin 8)
 long pulse_in() {
-    // Send 10us trigger pulse
-    DDRB |= (1 << PB5);          
-    DDRB &= ~(1 << PB0);         
+  // Send 10us trigger pulse
+  DDRB |= (1 << PB5);
+  DDRB &= ~(1 << PB0);
 
-    PORTB &= ~(1 << PB5);
-    _delay_us(2);
-    PORTB |= (1 << PB5);
-    _delay_us(10);
-    PORTB &= ~(1 << PB5);
+  PORTB &= ~(1 << PB5);
+  _delay_us(2);
+  PORTB |= (1 << PB5);
+  _delay_us(11);
+  PORTB &= ~(1 << PB5);
 
-    // Wait for ECHO to go HIGH
-    while (!(PINB & (1 << PB0)));
+  // Wait for ECHO to go HIGH
+  while (!(PINB & (1 << PB0)))
+    ;
 
-    // Count microseconds while ECHO is HIGH
-    TCNT1 = 0;
-    TCCR1B = (1 << CS11);         
-    while (PINB & (1 << PB0));
-    TCCR1B = 0;                   
+  // Count microseconds while ECHO is HIGH
+  TCNT1 = 0;
+  TCCR1B = (1 << CS11);
+  while (PINB & (1 << PB0))
+    ;
+  TCCR1B = 0;
 
-    return TCNT1 / 2;             
+  return TCNT1 / 2;
 }
 
 // map function
 int map_val(long x, long in_min, long in_max, long out_min, long out_max) {
-    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 // constrain
 int constrain_val(int x, int lo, int hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
-    return x;
+  if (x < lo) return lo;
+  if (x > hi) return hi;
+  return x;
 }
 
 int main() {
-    uart_init();
-    pwm_init();
-    DDRB |= (1 << PB5);
+  uart_init();
+  pwm_init();
+  DDRB |= (1 << PB5);
 
-    while (1) {
-        long duration = pulse_in();
+  while (1) {
+    long duration = pulse_in();
 
+
+    // Mapping duration
+    int distance_cm = map_val(duration, DIST_14CM, DIST_42CM, 42, 14);
+    distance_cm = constrain_val(distance_cm, 14, 42);
+    
+
+    // Mapping brightness
+    int brightness = map_val(duration, DIST_42CM, DIST_14CM, 0, 255);
+    brightness = constrain_val(brightness, 0, 255);
+    pwm_set(brightness);
+
+
+    int brightness_display = map_val(duration, DIST_14CM, DIST_42CM, 0, 255);
+    brightness_display = constrain_val(brightness_display, 0, 255);
+    
+
+
+    
+        uart_print("================");
+        uart_print_int(0);
         uart_print("Duration (us): ");
         uart_print_int(duration);
-
-        // Mapping duration
-        int distance_cm = map_val(duration, DIST_14CM, DIST_42CM, 14, 42);
-        distance_cm = constrain_val(distance_cm, 14, 42);
         uart_print("Distance (cm): ");
         uart_print_int(distance_cm);
-
-        // Mapping brightness
-        int brightness = map_val(duration, DIST_42CM, DIST_14CM, 0, 255);
-        brightness = constrain_val(brightness, 0, 255);
-        pwm_set(brightness);
-
-
-        int brightness_display = map_val(duration, DIST_14CM, DIST_42CM, 0, 255);
-        brightness_display = constrain_val(brightness_display, 0, 255);
         uart_print("Brightness: ");
         uart_print_int(brightness);
+    
 
-        // Blink LED L if out of range, otherwise just delay
-        if (duration < DIST_14CM || duration > DIST_42CM) {
-            PORTB |= (1 << PB5);
-            _delay_ms(500);
-            PORTB &= ~(1 << PB5);
-            _delay_ms(500);
-        } else {
-            PORTB &= ~(1 << PB5);
-            _delay_ms(1000);
-        }
+    // Blink LED L if out of range, otherwise just delay
+    if (duration < DIST_14CM || duration > DIST_42CM) {
+
+      uart_print("================");
+      uart_print_int(0);
+      uart_print("OUT OF RANGE");
+      uart_print_int(0);
+      PORTB |= (1 << PB5);
+      _delay_ms(502);
+      PORTB &= ~(1 << PB5);
+      _delay_ms(502);
+    } else {
+      PORTB &= ~(1 << PB5);
+      _delay_ms(502);
     }
+  }
 }
-*/
-
+#endif
