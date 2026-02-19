@@ -179,6 +179,13 @@ int main() {
     while (1) {
         uint16_t adc = adc_read();
 
+        // Map ADC to distance in cm (ADC 380 = 14cm, ADC 140 = 42cm)
+        int distance_cm = map_val(adc, DIST_14CM, DIST_42CM, 14, 42);
+        distance_cm = constrain_val(distance_cm, 14, 42);
+        uart_print("Distance (cm): ");
+        uart_print_int(distance_cm);
+
+      
         uart_print("ADC: ");
         uart_print_int(adc);
 
@@ -398,6 +405,7 @@ int constrain_val(int x, int lo, int hi) {
 int main() {
     uart_init();
     pwm_init();
+    DDRB |= (1 << PB5);
 
     while (1) {
         long duration = pulse_in();
@@ -405,6 +413,13 @@ int main() {
         uart_print("Duration (us): ");
         uart_print_int(duration);
 
+        // Mapping duration
+        int distance_cm = map_val(duration, DIST_14CM, DIST_42CM, 14, 42);
+        distance_cm = constrain_val(distance_cm, 14, 42);
+        uart_print("Distance (cm): ");
+        uart_print_int(distance_cm);
+
+        // Mapping brightness
         int brightness = map_val(duration, DIST_42CM, DIST_14CM, 0, 255);
         brightness = constrain_val(brightness, 0, 255);
         pwm_set(brightness);
@@ -415,7 +430,16 @@ int main() {
         uart_print("Brightness: ");
         uart_print_int(brightness);
 
-        _delay_ms(1000);
+        // Blink LED L if out of range, otherwise just delay
+        if (duration < DIST_14CM || duration > DIST_42CM) {
+            PORTB |= (1 << PB5);
+            _delay_ms(500);
+            PORTB &= ~(1 << PB5);
+            _delay_ms(500);
+        } else {
+            PORTB &= ~(1 << PB5);
+            _delay_ms(1000);
+        }
     }
 }
 */
