@@ -1,12 +1,14 @@
 /*
- * US SENSOR WIRING:
- *   TRIG → PB5 (pin 13)
+ * US SENSOR WIRING: P6
+ *   TRIG → PB3 (pin 13)
  *   ECHO → PD2 (pin 2) ← must be PD2 because INT0 is hardwired to PD2
  *
- * IR SENSOR WIRING (verify with your board's pinout):
+ * IR SENSOR WIRING: P5, P8, P14
  *   Left IR  → ADC0 (PC0)
  *   Bar IR   → ADC1 (PC1)
  *   Right IR → ADC2 (PC2)
+ * 
+ * IMU SENSOR: P7 or P19
  *
  * Compile:
  *   avr-gcc -mmcu=atmega328p -DF_CPU=16000000UL -Os -o main.elf main.c init_290.c TWI_290.c
@@ -48,10 +50,7 @@
  
 /* Front wall detection — US sensor pulse count.
    Check values when the wall is X cms away and calibrate . */
-#define WALL_NEAR               150
-
-/* triggers exit scan — further away */
-#define WALL_APPROACH_EXIT      300   
+#define WALL_NEAR               30
  
 /* Exit gap detection — US sensor pulse count.
    A gap reads much larger than a wall. Tune empirically. */
@@ -349,12 +348,12 @@ ISR(__vector_default) {}
 *     - us_trigger() is called once per 20ms tick from the main loop.
  * ================================================================ */
 static void us_trigger(void) {
-    /* PB5 = trig pin — same as your assignment 1 */
-    PORTB &= ~(1 << PB5);
+    /* PB3 = trig pin */
+    PORTB &= ~(1 << PB3);
     _delay_us(2);
-    PORTB |=  (1 << PB5);
+    PORTB |=  (1 << PB3);
     _delay_us(11);
-    PORTB &= ~(1 << PB5);
+    PORTB &= ~(1 << PB3);
 }
  
 /* ================================================================
@@ -367,7 +366,7 @@ typedef enum {
     BAR_DETECTED,   /* bar overhead — stop, pause, resume */
     TURN_RIGHT,     /* first 180 degree right turn */
     TURN_LEFT,      /* second 180 degree left turn */
-    TURN_TO_EXIT    /* 90 degree left turn toward exit gap */
+    TURN_TO_EXIT,    /* 90 degree left turn toward exit gap */
     EXIT            /* drive through the gap */
 } State;
  
@@ -400,10 +399,10 @@ int main(void) {
     OCR1B = 0;
  
     /* US sensor setup
-       PB5 = trig (output) 
+       3 = trig (output) 
        PD2 = echo (input)  — moved from PB0 to use INT0 */
-    DDRB  |=  (1 << PB5);              /* PB5 trig as output */
-    PORTB &= ~(1 << PB5);              /* trig starts LOW */
+    DDRB  |=  (1 << PB3);              /* PB3 trig as output */
+    PORTB &= ~(1 << PB3);              /* trig starts LOW */
     DDRD  &= ~(1 << PD2);              /* PD2 echo as input */
     PORTD &= ~(1 << PD2);              /* no pull-up on echo */
     EICRA |= (1 << ISC00);             /* any change on PD2 triggers INT0 */
@@ -438,9 +437,9 @@ int main(void) {
     if (imu_status != 0) {
         uart_print("IMU init failed code: ");
         uart_print_int(imu_status);
-        DDRB |= (1 << PB5);
+        DDRB |= (1 << PB3);
         while (1) {
-            PORTB ^= (1 << PB5);
+            PORTB ^= (1 << PB3);
             _delay_ms(200);
         }
     }
@@ -545,14 +544,14 @@ int main(void) {
                 /* Wall close ahead → decide which turn comes next.
                    Exit approach triggers earlier than turns. */
                 {
-                uint16_t wall_threshold = (turn_count < 3) ? WALL_NEAR : WALL_APPROACH_EXIT;
+                uint16_t wall_threshold = WALL_NEAR;
                     if (us_dist < wall_threshold && us_dist > 0) {
                         OCR0B = THRUST_SLOW;
                         tick_counter = 0;
                         if      (turn_count == 0) state = TURN_RIGHT;
                         else if (turn_count == 1) state = TURN_LEFT;
                         else if (turn_count == 2) state = TURN_RIGHT;
-                        else                      state = APPROACH_EXIT;
+                        else                      state = TURN_TO_EXIT;
                         turn_count++;
                         uart_print("State: TURN or APPROACH\r\n");
                     }
