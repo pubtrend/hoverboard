@@ -9,10 +9,13 @@
  *   Right IR → ADC2 (PC2)
  * 
  * IMU SENSOR: P7 or P19
+ * THRUST FAN: P4 or P11
+ * LIFT FAN: P3 or P11
+ * SERVO: Pin 9
  *
  * Compile:
- *   avr-gcc -mmcu=atmega328p -DF_CPU=16000000UL -Os -o main.elf main.c init_290.c TWI_290.c
- *   avr-objcopy -O ihex -R .eeprom main.elf main.hex
+ *   avr-gcc -mmcu=atmega328p -DF_CPU=16000000UL -Os -o hoverboard2.elf hoverboard2.c init_290.c TWI_290.c
+ *   avr-objcopy -O ihex -R .eeprom hoverboard2.elf hoverboard2.hex
  */
  
 /* ============================================================
@@ -57,7 +60,7 @@
 #define GAP_THRESHOLD           400
  
 /* How long to pause under the bar, in 20ms ticks. */
-#define BAR_PAUSE_TICKS         50      /* ~1 second */
+#define BAR_PAUSE_TICKS         150      /* ~3 second */
  
 /* ============================================================
  *  END OF TUNING BLOCK
@@ -437,9 +440,9 @@ int main(void) {
     if (imu_status != 0) {
         uart_print("IMU init failed code: ");
         uart_print_int(imu_status);
-        DDRB |= (1 << PB3);
+        DDRB |= (1 << PB5);
         while (1) {
-            PORTB ^= (1 << PB3);
+            PORTB ^= (1 << PB5);
             _delay_ms(200);
         }
     }
