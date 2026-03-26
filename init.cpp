@@ -1,7 +1,7 @@
 // For H/W version 3.10
 // July 2022
 
-#include "init_290.h"
+#include "init.h"
 #include <avr/interrupt.h>
 #include <stdlib.h>
 
@@ -95,7 +95,7 @@ void timer0_init () {
 
 void adc_init (uint8_t channel, uint8_t en_IRQ) {
 // ADC init
-  ADMUX=((1<<ADLAR)|(channel&0x0F)); // "left-aligned" result for easy 8-bit reading. 
+  ADMUX=((1<<ADLAR)|(channel&0x0F)|(1<<REFS0)); // "left-aligned" result for easy 8-bit reading. 
   												// AVcc as Aref |(1<<REFS0)
   												// Sets ADC to the specified channel. Can be changed later.
   ADCSRA=(1<<ADEN); 

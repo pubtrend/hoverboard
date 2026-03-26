@@ -1,12 +1,11 @@
+
+#include "TWI.h"
+#include "init.h"
+static volatile uint16_t ADC_acc = 0;
+
+// debugger - type this in terminal before running serial monitor -- /Users/liamsiemens/Library/Arduino15/packages/arduino/tools/avrdude/8.0.0-arduino1/bin/avrdude -C /Users/liamsiemens/Library/Arduino15/packages/arduino/tools/avrdude/8.0.0-arduino1/etc/avrdude.conf -p atmega328p -c arduino -P /dev/cu.usbserial-210 -b 57600 -U flash:w:/Users/liamsiemens/Library/Caches/arduino/sketches/439255BC1371E377265F13D6F6F9F5A9/hoverboard2.ino.hex:i
+
 /*
-
-
-
-
- * Don't forget to uncomment the debug!
- *
- * 
- *
  * US SENSOR WIRING: P6
  *   TRIG → PB3 (pin 13)
  *   ECHO → PD2 (pin 2) - note INT0 interrupt
@@ -67,7 +66,7 @@
  * ============================================================ */
  
 /* Uncomment to enable UART debug printing */
-/* #define DEBUG */
+#define DEBUG
  
 /* ---- Standard includes ---- */
 #define F_CPU 16000000UL
@@ -78,11 +77,11 @@
 #include <stdio.h>
 #include <math.h>
  
-#include "init_290.h"
-#include "TWI_290.h"
+#include "init.h"
+#include "TWI.h"
  
 /* ================================================================
- *  IMU SECTION — from assignment 2
+ *  IMU SECTION 
  * ================================================================ */
  
 /* flags_t must match TWI_290.c's extern declaration */
@@ -111,10 +110,8 @@ typedef struct {
 #define MPU_DLPF_CFG        3
 #define MPU_SMPLRT_DIV      9       /* 100 Hz sample rate */
  
-extern const uint16_t Servo_angle[256];
- 
 /* TWI shared variables — must match TWI_290.c */
-volatile flags_t flags = { .TWI_ACK = 1 };
+volatile flags_t flags; // had to delete { .TWI_ACK = 1 }
 volatile uint8_t TWI_status = 0;
 volatile uint8_t TWI_byte   = 0;
  
@@ -131,7 +128,7 @@ static float gx_dps             = 0.0f;
 static float gy_dps             = 0.0f;
 static float gz_dps             = 0.0f;
  
-/* ---- UART helpers (from assignment 1) ---- */
+/* ---- UART helpers ---- */
 static void uart_send(char c) {
     while (!(UCSR0A & (1 << UDRE0)));
     UDR0 = (uint8_t)c;
@@ -172,7 +169,7 @@ static uint8_t mpu_read_reg(uint8_t reg, uint8_t *value) {
     return 0;
 }
 static uint8_t mpu_read_burst(uint8_t start_reg, uint8_t *buf, uint8_t count) {
-    return Read_Reg_N(MPU6050_ADDR, start_reg, count, (int16_t)(uint16_t)buf);
+    return Read_Reg_N(MPU6050_ADDR, start_reg, count, (int16_t)buf);
 }
 static int16_t be16_to_i16(uint8_t hi, uint8_t lo) {
     return (int16_t)((((uint16_t)hi) << 8) | lo);
@@ -181,17 +178,23 @@ static int16_t be16_to_i16(uint8_t hi, uint8_t lo) {
 /* ---- IMU init ---- */
 static uint8_t mpu_init(void) {
     uint8_t who_am_i = 0;
-    _delay_ms(50);
-    if (mpu_write(REG_PWR_MGMT_1, 0x80)) return 1;  /* reset */
+    
+    /* Send reset — IMU drops bus immediately so ignore ACK */
+    mpu_write(REG_PWR_MGMT_1, 0x80);
     _delay_ms(100);
-    if (mpu_write(REG_PWR_MGMT_1, 0x01)) return 2;  /* wake up */
+    
+    /* Wake up and configure — ignore ACK on writes, TWI_ACK unreliable */
+    mpu_write(REG_PWR_MGMT_1, 0x01);
     _delay_ms(10);
-    if (mpu_write(REG_SMPLRT_DIV, MPU_SMPLRT_DIV))                              return 3;
-    if (mpu_write(REG_CONFIG, MPU_DLPF_CFG & 0x07))                             return 4;
-    if (mpu_write(REG_GYRO_CONFIG,  (uint8_t)((MPU_GYRO_FS_SEL  & 0x03) << 3))) return 5;
-    if (mpu_write(REG_ACCEL_CONFIG, (uint8_t)((MPU_ACCEL_FS_SEL & 0x03) << 3))) return 6;
+    mpu_write(REG_SMPLRT_DIV, MPU_SMPLRT_DIV);
+    mpu_write(REG_CONFIG, MPU_DLPF_CFG & 0x07);
+    mpu_write(REG_GYRO_CONFIG,  (uint8_t)((MPU_GYRO_FS_SEL  & 0x03) << 3));
+    mpu_write(REG_ACCEL_CONFIG, (uint8_t)((MPU_ACCEL_FS_SEL & 0x03) << 3));
+    
+    /* WHO_AM_I read is the real confirmation everything worked */
     if (mpu_read_reg(REG_WHO_AM_I, &who_am_i)) return 7;
-    if ((who_am_i & 0x7EU) != 0x68U)           return 8;  /* wrong chip */
+    uart_print("whoami="); uart_print_int(who_am_i);
+    if ((who_am_i & 0x7EU) != 0x68U) return 8;
     return 0;
 }
  
@@ -295,19 +298,19 @@ ISR(TIMER1_CAPT_vect) {   // TIMER1_CAPT_vect... variable defined by avr library
 /* INT0 ISR — fires when PD2 (echo pin) changes
    Measures how long the echo pulse lasts = distance to wall
    records the start and end times and lets the main loop keep running. */
-ISR(INT0_vect) {            // INT0_vect... variable defined by avr library.
+ISR(INT0_vect) {
+    uart_print("echo!\r\n");
     if (PIND & (1 << PD2)) {
         /* echo just went HIGH, start timing */
         nav_flags.T1_ovf0 = 0;
-        PULSE_data.t_start0 = TCNT1;   // TCNT1 is a counter that tracks time - goes from 0 to 2500 and then resets
+        PULSE_data.t_start0 = TCNT1;
     } else {
         /* echo just went LOW, stop timing */
         PULSE_data.t_end0 = TCNT1;
-        /* T1_ovf0 handles case where timer wrapped around during measurement */
         if      (nav_flags.T1_ovf0 == 0) PULSE_data.pulse0 = PULSE_data.t_end0 - PULSE_data.t_start0;
         else if (nav_flags.T1_ovf0 == 1) PULSE_data.pulse0 = PWM_TOP - PULSE_data.t_start0 + PULSE_data.t_end0;
         else if (nav_flags.T1_ovf0 == 2) PULSE_data.pulse0 = PWM_TOP - PULSE_data.t_start0 + PULSE_data.t_end0 + PWM_TOP;
-        else                              PULSE_data.pulse0 = 0xFFFF; /* too far, out of range */
+        else                              PULSE_data.pulse0 = 0xFFFF;
     }
 }
  
@@ -349,12 +352,12 @@ ISR(__vector_default) {}
 *     - us_trigger() is called once per 20ms tick from the main loop.
  * ================================================================ */
 static void us_trigger(void) {
-    /* PB3 = trig pin */
     PORTB &= ~(1 << PB3);
     _delay_us(2);
     PORTB |=  (1 << PB3);
     _delay_us(11);
     PORTB &= ~(1 << PB3);
+    uart_print("trig\r\n");  // add this line temporarily
 }
  
 /* ================================================================
@@ -374,7 +377,18 @@ typedef enum {
 /* ================================================================
  *  MAIN
  * ================================================================ */
-int main(void) {
+
+/* ---- State machine variables ---- */
+    State    state        = LAUNCH;
+    uint16_t tick_counter = 0;      /* counts 20ms ticks for timing */
+    uint8_t  turn_count   = 0;      /* tracks how many turns completed */
+    const float dt_s      = 0.020f; /* 20ms in seconds for IMU integration */
+    uint16_t prev_us_dist = 0;
+    int8_t   seek_dir     = 1;
+    uint8_t  servo_seek   = SERVO_CENTER;
+ 
+
+void setup() {
  
     /* ---- Hardware init ---- */
     gpio_init();
@@ -426,41 +440,41 @@ int main(void) {
     PORTC |=  (1 << PC5) | (1 << PC4);
  
     twi_init();
-    _delay_ms(300);
+    _delay_ms(1000);
  
     /* sei() — open the interrupt gate.
        Must come after ALL init calls.
        Without this nothing fires: no ADC, no heartbeat, no US timing. */
     sei();
- 
-    /* IMU init — if it fails, blink LED and halt */
-    uint8_t imu_status = mpu_init();
-    if (imu_status != 0) {
-        uart_print("IMU init failed code: ");
-        uart_print_int(imu_status);
-        DDRB |= (1 << PB5);
-        while (1) {
-            PORTB ^= (1 << PB5);
-            _delay_ms(200);
-        }
+
+/* Disable ADC interrupt during IMU init to prevent I2C corruption */
+ADCSRA &= ~(1 << ADIE);
+
+/* IMU init — if it fails, blink LED and halt */
+uint8_t imu_status = mpu_init();
+if (imu_status != 0) {
+    uart_print("IMU init failed code: ");
+    uart_print_int(imu_status);
+    DDRB |= (1 << PB5);
+    while (1) {
+        PORTB ^= (1 << PB5);
+        _delay_ms(200);
     }
- 
+}
+
+/* Re-enable ADC interrupt after IMU is initialized */
+ADCSRA |= (1 << ADIE);
+
     /* Calibrate IMU — hovercraft must be sitting still during this */
     mpu_calibrate_still();
  
-    uart_print("Hovercraft ready.\r\n");
+    uart_print("THIS IS THE NEW CODE.\r\n");
  
-    /* ---- State machine variables ---- */
-    State    state        = LAUNCH;
-    uint16_t tick_counter = 0;      /* counts 20ms ticks for timing */
-    uint8_t  turn_count   = 0;      /* tracks how many turns completed */
-    const float dt_s      = 0.020f; /* 20ms in seconds for IMU integration */
-    uint16_t prev_us_dist = 0;
-    int8_t   seek_dir     = 1;
-    uint8_t  servo_seek   = SERVO_CENTER;
- 
+}
     /* ---- Main loop ---- */
-    while (1) {
+void loop() {
+
+        while(1) {
  
         /* Wait for 20ms heartbeat from Timer1 ISR.
            Everything below runs at exactly 50Hz. */
@@ -531,7 +545,7 @@ int main(void) {
                     state = TURN_TO_EXIT;  // new state!
                     uart_print("State: TURN_TO_EXIT\r\n");
                     break;
-}
+                }
  
                 /* Bar detected overhead → stop and pause */
                 if (ir_bar > BAR_THRESHOLD) {
@@ -639,6 +653,11 @@ int main(void) {
         #endif
  
     } /* end while(1) */
- 
-    return 0;
 }
+ 
+ 
+ int main(void) {
+    setup();
+    loop();
+    return 0;
+ }

@@ -1,4 +1,5 @@
 #include <util/twi.h>
+#include "TWI.h"
 
 extern volatile struct {
 	uint8_t TX_new_data:1;
