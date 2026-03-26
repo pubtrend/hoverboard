@@ -151,7 +151,7 @@ static void uart_print_float(const char *label, float value) {
     uart_print(buf);
 }
  
-/* ---- Assignment 1 mapping function Resused! ---- */
+/* ---- Assignment 1 mapping function ---- */
 int map_val(long x, long in_min, long in_max, long out_min, long out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
