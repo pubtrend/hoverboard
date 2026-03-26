@@ -1,7 +1,15 @@
 /*
+
+
+
+
+ * Don't forget to uncomment the debug!
+ *
+ * 
+ *
  * US SENSOR WIRING: P6
  *   TRIG → PB3 (pin 13)
- *   ECHO → PD2 (pin 2) ← must be PD2 because INT0 is hardwired to PD2
+ *   ECHO → PD2 (pin 2) - note INT0 interrupt
  *
  * IR SENSOR WIRING: P5, P8, P14
  *   Left IR  → ADC0 (PC0)
@@ -10,7 +18,7 @@
  * 
  * IMU SENSOR: P7 or P19
  * THRUST FAN: P4 or P11
- * LIFT FAN: P3 or P11
+ * LIFT FAN: P3 
  * SERVO: Pin 9
  *
  * Compile:
@@ -22,41 +30,33 @@
  *  TUNING CONSTANTS — edit as needed
  * ============================================================ */
  
-/* Lift fan — OCR0A, range 0-255.
-   Start around 180 and raise until hovercraft lifts cleanly. */
+/* Lift fan — OCR0A, range 0-255. */
 #define LIFT_SPEED              180
  
-/* Thrust fan — OCR0B, range 0-255.
-   CRUISE = normal forward speed. SLOW = approaching wall / turning. */
+/* Thrust fan — OCR0B, range 0-255. */
 #define THRUST_CRUISE           120
 #define THRUST_SLOW             70
 #define THRUST_OFF              0
  
-/* Servo indices into Servo_angle[].
-   127 = center. Lower = one direction, higher = other. */
+/* Servo index - goes into Servo_angle[].
+   127 = center. Lower = left, higher = right. */
 #define SERVO_CENTER            127
 #define SERVO_TURN_RIGHT        160
 #define SERVO_TURN_LEFT         94
  
-/* IMU yaw correction.Start at 0.5 and increase until drift is corrected without oscillating. */
-#define YAW_KP                  0.5f
- 
-/* IR centering gain — lower number = more aggressive correction */
+/* IR centering gain — lower number means more aggressive correction */
 #define IR_CENTER_GAIN          4
 
 /* Left wall disappears = exit gap found. */
-#define IR_LEFT_GAP_THRESHOLD   100
+#define IR_LEFT_GAP_THRESHOLD   50
  
-/* Bar detection — IR sensor overhead.
-   DONT FORGET: use debug to find the ADC value when bar is overhead. */
+/* Bar detection — IR sensor overhead. */
 #define BAR_THRESHOLD           180
  
-/* Front wall detection — US sensor pulse count.
-   Check values when the wall is X cms away and calibrate . */
+/* Front wall detection — US sensor pulse count. CALIBRATE. */
 #define WALL_NEAR               30
  
-/* Exit gap detection — US sensor pulse count.
-   A gap reads much larger than a wall. Tune empirically. */
+/* Exit gap detection — US sensor pulse count. CALIBRATE. */
 #define GAP_THRESHOLD           400
  
 /* How long to pause under the bar, in 20ms ticks. */
@@ -246,14 +246,13 @@ static void update_yaw(float dt_s) {
  
 #define PWM_TOP 2500
  
-/* flags -- flags updated by ISRs which pulse every 20ms to match state with raw data
-    overflow rollovers for US are tracked to keep track of pulse/time/etc */
+/* flags -- flags updated by ISRs which pulse every 20ms to match state with raw data - uses overflow when US is larger than 2500 */
 volatile struct {
     uint8_t TX_finished:1;
     uint8_t sample:1; // pulses on and off every 20ms to slow the main loop down
     uint8_t mode:1; // not used rn
     uint8_t stop:1; // not used rn
-    uint8_t T1_ovf0:2; // US flag rollover
+    uint8_t T1_ovf0:2; // US flag rollover, 2 bits so we can have 0 to 3 wrap arounds
 } nav_flags;
  
 /* ADC results — 
@@ -267,8 +266,7 @@ static volatile struct {
     uint8_t ADC7; //not used rn
 } ADC_data;
  
-/* US sensor pulse — filled by INT0 ISR
-   pulse0 is the final distance value the main loop reads */
+/* US sensor pulse — filled by INT0 ISR interrupt */
 static volatile struct {
     uint16_t pulse0;      // final duration (send this to main loop)
     uint16_t t_start0;    // time recorded when echo pin goes HIGH
@@ -278,7 +276,7 @@ static volatile struct {
 static volatile uint16_t sys_time   = 0;
 static volatile uint16_t delay_ms   = 0;
 static volatile uint8_t  ADC_sample = 0;
-static volatile uint16_t ADC_acc    = 0;
+static volatile uint16_t ADC_avg    = 0;
  
 #define ADC_SAMPLE_MAX 4
  
@@ -287,7 +285,7 @@ static volatile uint16_t ADC_acc    = 0;
  * ================================================================ */
  
 /* Timer1 ISR — fires every 20ms. Set nav_flag.sample to 1 to start while loop */
-ISR(TIMER1_CAPT_vect) {
+ISR(TIMER1_CAPT_vect) {   // TIMER1_CAPT_vect... variable defined by avr library. 
     sys_time++;
     delay_ms += 20;
     nav_flags.sample = 1;
@@ -297,7 +295,7 @@ ISR(TIMER1_CAPT_vect) {
 /* INT0 ISR — fires when PD2 (echo pin) changes
    Measures how long the echo pulse lasts = distance to wall
    records the start and end times and lets the main loop keep running. */
-ISR(INT0_vect) {
+ISR(INT0_vect) {            // INT0_vect... variable defined by avr library.
     if (PIND & (1 << PD2)) {
         /* echo just went HIGH, start timing */
         nav_flags.T1_ovf0 = 0;
@@ -323,20 +321,20 @@ ISR(ADC_vect) {
         return;
     }
     if (ADC_sample <= ADC_SAMPLE_MAX) {
-        ADC_acc += ADCH;
-        ADC_sample++;
+        ADC_acc += ADCH; // ADCH - predefined register that holds the result of the last ADC conversion 
+        ADC_sample++;                 // -- exclusively using the high (8bits) to avoid overflow
         return;
     }
     /* have 4 samples — average them and store result */
     ADC_sample = 0;
     ADC_acc /= ADC_SAMPLE_MAX;
     switch (ADMUX & 7) {
-        case 0: ADMUX = (ADMUX & 0xF0) | 0x01; ADC_data.ADC0 = (uint8_t)ADC_acc; return;
+        case 0: ADMUX = (ADMUX & 0xF0) | 0x01; ADC_data.ADC0 = (uint8_t)ADC_acc; return;    //flips btwn channels
         case 1: ADMUX = (ADMUX & 0xF0) | 0x02; ADC_data.ADC1 = (uint8_t)ADC_acc; return;
         case 2: ADMUX = (ADMUX & 0xF0) | 0x03; ADC_data.ADC2 = (uint8_t)ADC_acc; return;
-        case 3: ADMUX = (ADMUX & 0xF0) | 0x06; ADC_data.ADC3 = (uint8_t)ADC_acc; return;
-        case 6: ADMUX = (ADMUX & 0xF0) | 0x07; ADC_data.ADC6 = (uint8_t)ADC_acc; return;
-        case 7: ADMUX = (ADMUX & 0xF0) | 0x00; ADC_data.ADC7 = (uint8_t)ADC_acc; return;
+        case 3: ADMUX = (ADMUX & 0xF0) | 0x06; ADC_data.ADC3 = (uint8_t)ADC_acc; return;    // not used rn
+        case 6: ADMUX = (ADMUX & 0xF0) | 0x07; ADC_data.ADC6 = (uint8_t)ADC_acc; return;    // not used rn
+        case 7: ADMUX = (ADMUX & 0xF0) | 0x00; ADC_data.ADC7 = (uint8_t)ADC_acc; return;    // not used rn
         default: ADMUX = (ADMUX & 0xF0) | 0x00;
     }
 }
@@ -525,7 +523,7 @@ int main(void) {
 
                
                 /* Left wall disappeared → exit gap found, turn 90 degrees then exit */
-                if (turn_count >= 3 && ir_left < IR_LEFT_GAP_THRESHOLD) {
+                if (ir_left < IR_LEFT_GAP_THRESHOLD) {
                     OCR0B = THRUST_SLOW;
                     OCR1A = Servo_angle[SERVO_TURN_LEFT];
                     yaw_deg = 0.0f;        // reset yaw so we measure from here
