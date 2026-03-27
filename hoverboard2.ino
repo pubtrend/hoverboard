@@ -2,33 +2,26 @@
 #include "TWI.h"
 #include "init.h"
 static volatile uint16_t ADC_acc = 0;
+static volatile uint8_t us_ovf = 0;
+static volatile uint16_t t2_ovf = 0;
+int8_t exit_dir = 0; // -1 = left, +1 = right
 
-// debugger - type this in terminal before running serial monitor -- /Users/liamsiemens/Library/Arduino15/packages/arduino/tools/avrdude/8.0.0-arduino1/bin/avrdude -C /Users/liamsiemens/Library/Arduino15/packages/arduino/tools/avrdude/8.0.0-arduino1/etc/avrdude.conf -p atmega328p -c arduino -P /dev/cu.usbserial-210 -b 57600 -U flash:w:/Users/liamsiemens/Library/Caches/arduino/sketches/439255BC1371E377265F13D6F6F9F5A9/hoverboard2.ino.hex:i
 
 /*
- * US SENSOR WIRING: P6
- *   TRIG → PB3 (pin 13)
- *   ECHO → PD2 (pin 2) - note INT0 interrupt
- *
- * IR SENSOR WIRING: P5, P8, P14
- *   Left IR  → ADC0 (PC0)
- *   Bar IR   → ADC1 (PC1)
- *   Right IR → ADC2 (PC2)
- * 
- * IMU SENSOR: P7 or P19
- * THRUST FAN: P4 or P11
- * LIFT FAN: P3 
- * SERVO: Pin 9
- *
- * Compile:
- *   avr-gcc -mmcu=atmega328p -DF_CPU=16000000UL -Os -o hoverboard2.elf hoverboard2.c init_290.c TWI_290.c
- *   avr-objcopy -O ihex -R .eeprom hoverboard2.elf hoverboard2.hex
- */
+Wiring:
+US: trig PB3, echo PD2
+IR: left ADC0, top ADC1, right ADC2
+servo: D9
+lift fan: P3
+thrust fan: P4/P11
+IMU: P7/P19
+*/
+
  
-/* ============================================================
- *  TUNING CONSTANTS — edit as needed
- * ============================================================ */
- 
+  //
+ // TUNING CONSTANTS
+//
+
 /* Lift fan — OCR0A, range 0-255. */
 #define LIFT_SPEED              180
  
@@ -47,7 +40,7 @@ static volatile uint16_t ADC_acc = 0;
 #define IR_CENTER_GAIN          4
 
 /* Left wall disappears = exit gap found. */
-#define IR_LEFT_GAP_THRESHOLD   50
+#define IR_LEFT_GAP_THRESHOLD   150
  
 /* Bar detection — IR sensor overhead. */
 #define BAR_THRESHOLD           180
@@ -55,17 +48,10 @@ static volatile uint16_t ADC_acc = 0;
 /* Front wall detection — US sensor pulse count. CALIBRATE. */
 #define WALL_NEAR               30
  
-/* Exit gap detection — US sensor pulse count. CALIBRATE. */
-#define GAP_THRESHOLD           400
- 
 /* How long to pause under the bar, in 20ms ticks. */
 #define BAR_PAUSE_TICKS         150      /* ~3 second */
  
-/* ============================================================
- *  END OF TUNING BLOCK
- * ============================================================ */
- 
-/* Uncomment to enable UART debug printing */
+// Debugging block
 #define DEBUG
  
 /* ---- Standard includes ---- */
@@ -76,15 +62,10 @@ static volatile uint16_t ADC_acc = 0;
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
- 
-#include "init.h"
-#include "TWI.h"
- 
-/* ================================================================
- *  IMU SECTION 
- * ================================================================ */
- 
-/* flags_t must match TWI_290.c's extern declaration */
+
+// IMU
+
+// imu flags
 typedef struct {
     uint8_t TX_new_data:1;
     uint8_t TX_finished:1;
@@ -111,7 +92,7 @@ typedef struct {
 #define MPU_SMPLRT_DIV      9       /* 100 Hz sample rate */
  
 /* TWI shared variables — must match TWI_290.c */
-volatile flags_t flags; // had to delete { .TWI_ACK = 1 }
+volatile flags_t flags; 
 volatile uint8_t TWI_status = 0;
 volatile uint8_t TWI_byte   = 0;
  
@@ -148,17 +129,40 @@ static void uart_print_float(const char *label, float value) {
     uart_print(buf);
 }
  
-/* ---- Assignment 1 mapping function ---- */
+// Assign1 mapping function 
 int map_val(long x, long in_min, long in_max, long out_min, long out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
+
+
 int constrain_val(int x, int lo, int hi) {
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
 }
+
+
+// Returns distance in cm from raw 8-bit ADC value
+        // Based on GP2Y0A21YK0F datasheet curve, 5V Vref
+    int ir_to_cm(uint8_t adc) {
+    if (adc > 200) return 10;
+    if (adc < 30)  return 80;
+    
+    static const uint8_t adc_pts[] = {200, 170, 140, 110,  90,  75,  60,  45,  30};
+    static const uint8_t  cm_pts[] = { 10,  12,  15,  20,  25,  30,  40,  55,  80};
+    
+    for (uint8_t i = 0; i < 8; i++) {
+        if (adc >= adc_pts[i+1]) {
+            uint8_t adc_range = adc_pts[i] - adc_pts[i+1];
+            uint8_t cm_range  = cm_pts[i+1] - cm_pts[i];
+            int raw = cm_pts[i] + (int)(adc_pts[i] - adc) * cm_range / adc_range;
+            return raw * 20 / 35 + 4;  // calibration applied here
+        }
+    }
+    return 80;
+}
  
-/* ---- TWI helpers ---- */
+// TWI helpers
 static uint8_t mpu_write(uint8_t reg, uint8_t value) {
     return Write_Reg(MPU6050_ADDR, reg, value);
 }
@@ -175,7 +179,7 @@ static int16_t be16_to_i16(uint8_t hi, uint8_t lo) {
     return (int16_t)((((uint16_t)hi) << 8) | lo);
 }
  
-/* ---- IMU init ---- */
+// IMU init
 static uint8_t mpu_init(void) {
     uint8_t who_am_i = 0;
     
@@ -198,7 +202,7 @@ static uint8_t mpu_init(void) {
     return 0;
 }
  
-/* ---- Read all sensor data from IMU and scale to real units ---- */
+// read accel/gyro
 static uint8_t mpu_read_scaled(void) {
     uint8_t raw[14];
     if (mpu_read_burst(REG_ACCEL_XOUT_H, raw, 14)) return 1;
@@ -211,9 +215,7 @@ static uint8_t mpu_read_scaled(void) {
     return 0;
 }
  
-/* ---- Calibrate while hovercraft is stationary ----
-   Takes 500 readings, averages them to find the "zero" drift.
-   Call this before the main loop with hovercraft sitting still. */
+// gyro bias calibration while still
 static void mpu_calibrate_still(void) {
     const uint16_t samples = 500;
     uint16_t good = 0;
@@ -235,21 +237,18 @@ static void mpu_calibrate_still(void) {
     uart_print("Calibration done.\r\n");
 }
  
-/* ---- Update yaw by integrating gyro over time ----
-   Called every 20ms. Tracks which direction hovercraft is facing. */
+// integrate z gyro into yaw
 static void update_yaw(float dt_s) {
     yaw_deg += (gz_dps - gyro_bias_z_dps) * dt_s;
     if (yaw_deg >  180.0f) yaw_deg -= 360.0f;
     if (yaw_deg < -180.0f) yaw_deg += 360.0f;
 }
  
-/* ================================================================
- *  SENSOR VARIABLES — filled by ISRs, read by main loop
- * ================================================================ */
+// SENSOR VARIABLES
  
 #define PWM_TOP 2500
  
-/* flags -- flags updated by ISRs which pulse every 20ms to match state with raw data - uses overflow when US is larger than 2500 */
+// flags updated in ISRs
 volatile struct {
     uint8_t TX_finished:1;
     uint8_t sample:1; // pulses on and off every 20ms to slow the main loop down
@@ -279,38 +278,36 @@ static volatile struct {
 static volatile uint16_t sys_time   = 0;
 static volatile uint16_t delay_ms   = 0;
 static volatile uint8_t  ADC_sample = 0;
-static volatile uint16_t ADC_avg    = 0;
  
 #define ADC_SAMPLE_MAX 4
  
-/* ================================================================
- *  ISRs — these run automatically in the background
- * ================================================================ */
- 
+// ISRS
+
 /* Timer1 ISR — fires every 20ms. Set nav_flag.sample to 1 to start while loop */
-ISR(TIMER1_CAPT_vect) {   // TIMER1_CAPT_vect... variable defined by avr library. 
+ISR(TIMER1_CAPT_vect) {
     sys_time++;
     delay_ms += 20;
     nav_flags.sample = 1;
     nav_flags.T1_ovf0++;
+    us_ovf++;
 }
+
+ISR(TIMER2_OVF_vect) {
+        t2_ovf++;
+    }
  
 /* INT0 ISR — fires when PD2 (echo pin) changes
    Measures how long the echo pulse lasts = distance to wall
    records the start and end times and lets the main loop keep running. */
+
 ISR(INT0_vect) {
-    uart_print("echo!\r\n");
     if (PIND & (1 << PD2)) {
-        /* echo just went HIGH, start timing */
-        nav_flags.T1_ovf0 = 0;
-        PULSE_data.t_start0 = TCNT1;
+        t2_ovf = 0;      
+        TCNT2 = 0;
+        PULSE_data.t_start0 = 0;
     } else {
-        /* echo just went LOW, stop timing */
-        PULSE_data.t_end0 = TCNT1;
-        if      (nav_flags.T1_ovf0 == 0) PULSE_data.pulse0 = PULSE_data.t_end0 - PULSE_data.t_start0;
-        else if (nav_flags.T1_ovf0 == 1) PULSE_data.pulse0 = PWM_TOP - PULSE_data.t_start0 + PULSE_data.t_end0;
-        else if (nav_flags.T1_ovf0 == 2) PULSE_data.pulse0 = PWM_TOP - PULSE_data.t_start0 + PULSE_data.t_end0 + PWM_TOP;
-        else                              PULSE_data.pulse0 = 0xFFFF;
+        uint16_t ticks = t2_ovf * 256 + TCNT2;
+        PULSE_data.pulse0 = ticks / 7;
     }
 }
  
@@ -345,53 +342,48 @@ ISR(ADC_vect) {
 /* Catch-all — prevents crash if an unexpected interrupt fires */
 ISR(__vector_default) {}
  
-/* ================================================================
- *  US SENSOR TRIGGER
- *    - us_trigger() sends the 10us pulse to start a measurement
- *    - INT0 ISR catches the echo automatically in the background
-*     - us_trigger() is called once per 20ms tick from the main loop.
- * ================================================================ */
+
+//   US SENSOR TRIGGER
+
 static void us_trigger(void) {
     PORTB &= ~(1 << PB3);
     _delay_us(2);
     PORTB |=  (1 << PB3);
     _delay_us(11);
     PORTB &= ~(1 << PB3);
-    uart_print("trig\r\n");  // add this line temporarily
 }
  
-/* ================================================================
- *  NAVIGATION STATE MACHINE
- * ================================================================ */
+// NAVIGATION
  
 typedef enum {
-    LAUNCH,         /* spin up lift fan, wait for hover, then start thrust */
-    FORWARD,        /* drive straight, IR centering + IMU yaw correction */
-    BAR_DETECTED,   /* bar overhead — stop, pause, resume */
-    TURN_RIGHT,     /* first 180 degree right turn */
-    TURN_LEFT,      /* second 180 degree left turn */
-    TURN_TO_EXIT,    /* 90 degree left turn toward exit gap */
-    EXIT            /* drive through the gap */
+    LAUNCH,         
+    FORWARD,        
+    BAR_DETECTED,   
+    TURN_RIGHT,     
+    TURN_LEFT,      
+    TURN_TO_EXIT,   
+    EXIT            
 } State;
  
-/* ================================================================
- *  MAIN
- * ================================================================ */
 
-/* ---- State machine variables ---- */
+// machine variables
     State    state        = LAUNCH;
     uint16_t tick_counter = 0;      /* counts 20ms ticks for timing */
     uint8_t  turn_count   = 0;      /* tracks how many turns completed */
     const float dt_s      = 0.020f; /* 20ms in seconds for IMU integration */
-    uint16_t prev_us_dist = 0;
-    int8_t   seek_dir     = 1;
-    uint8_t  servo_seek   = SERVO_CENTER;
  
-
+// MAIN
 void setup() {
- 
-    /* ---- Hardware init ---- */
+    
+    // Hardware init
+    UBRR0H = 0;
+    UBRR0L = 103;
+    UCSR0B = (1 << TXEN0);
+    UCSR0C = (3 << UCSZ00);
+    uart_print("BOOT\r\n");  // add this immediately after UART init
     gpio_init();
+    PORTD &= ~(1 << PD2);  // force pull-up OFF on echo pin
+    DDRD  &= ~(1 << PD2);  // ensure input
  
     /* Power all sensor connectors (PD4-PD7 are power control pins) */
     PORTD |= (1 << PD7) | (1 << PD6) | (1 << PD5) | (1 << PD4);
@@ -404,8 +396,8 @@ void setup() {
  
     /* Timer0: fan PWM. Both fans off at startup. */
     timer0_init();
-    OCR0A = 0;  /* lift fan off */
-    OCR0B = 0;  /* thrust fan off */
+    OCR0A = 0;  
+    OCR0B = 0;  
  
     /* Timer1: servo PWM + 20ms heartbeat.
        Passing 1 enables TIMER1_CAPT IRQ which drives nav_flags.sample */
@@ -447,6 +439,13 @@ void setup() {
        Without this nothing fires: no ADC, no heartbeat, no US timing. */
     sei();
 
+    // Timer2: normal mode, prescaler 128
+    // Each tick = 128/16MHz = 8us
+    // Max range = 256 ticks × 8us = 2ms per overflow
+    TCCR2A = 0;
+    TCCR2B = (1<<CS22)|(1<<CS20);  // prescaler 128
+    TIMSK2 = (1<<TOIE2);           // overflow interrupt
+
 /* Disable ADC interrupt during IMU init to prevent I2C corruption */
 ADCSRA &= ~(1 << ADIE);
 
@@ -462,6 +461,8 @@ if (imu_status != 0) {
     }
 }
 
+
+
 /* Re-enable ADC interrupt after IMU is initialized */
 ADCSRA |= (1 << ADIE);
 
@@ -471,7 +472,7 @@ ADCSRA |= (1 << ADIE);
     uart_print("THIS IS THE NEW CODE.\r\n");
  
 }
-    /* ---- Main loop ---- */
+    // Main loop
 void loop() {
 
         while(1) {
@@ -481,17 +482,15 @@ void loop() {
         if (!nav_flags.sample) continue;
         nav_flags.sample = 0;
  
-        /* ---- Trigger US sensor ----
-           Send the 10us trig pulse. INT0 ISR catches the echo
-           automatically and updates PULSE_data.pulse0. */
+        // Trigger US sensor
         us_trigger();
  
-        /* ---- Read IMU ---- */
+        // Read IMU
         if (!mpu_read_scaled()) {
             update_yaw(dt_s);
         }
  
-        /* ---- Snapshot all sensors ----
+        /* Snapshot all sensors
            Read the latest values filled by ISRs.
            ir_left/ir_right: used to keep hovercraft centered in corridor
            ir_bar: detects overhead bar
@@ -501,18 +500,16 @@ void loop() {
         uint8_t  ir_right = ADC_data.ADC2;
         uint16_t us_dist  = PULSE_data.pulse0;
  
-        /* ---- State machine ---- */
+        // States
         switch (state) {
- 
-            /* ---------------------------------------------------------- */
+
             case LAUNCH:
-            /* Spin up lift fan. Wait 1.5 seconds for hovercraft to lift.
-               Then start thrust and move to FORWARD. */
+            /* Wait 1.5 seconds after lift to thrust */
                 OCR0A = LIFT_SPEED;
                 OCR0B = THRUST_OFF;
                 OCR1A = Servo_angle[SERVO_CENTER];
                 tick_counter++;
-                if (tick_counter >= 75) {
+                if (tick_counter >= 150) {
                     tick_counter = 0;
                     OCR0B = THRUST_CRUISE;
                     yaw_deg = 0.0f;
@@ -521,12 +518,10 @@ void loop() {
                 }
                 break;
  
-            /* ---------------------------------------------------------- */
             case FORWARD:
-            /* Drive straight.
-               Use left and right IR sensors to stay centered in corridor.
-               Error = difference between left and right readings.
-               If left reads higher than right → too close to left wall → steer right. */
+            // center using left/right IR
+
+
                 OCR0B = THRUST_CRUISE;
                 {
                     int16_t error = (int16_t)ir_left - (int16_t)ir_right;
@@ -534,21 +529,27 @@ void loop() {
                     servo_idx = constrain_val(servo_idx, 80, 174);
                     OCR1A = Servo_angle[servo_idx];
                 }
-
                
-                /* Left wall disappeared → exit gap found, turn 90 degrees then exit */
+                // Wall disappeared → exit gap found, turn 90 degrees then exit 
                 if (ir_left < IR_LEFT_GAP_THRESHOLD) {
+                    exit_dir = -1;   // LEFT EXIT
                     OCR0B = THRUST_SLOW;
-                    OCR1A = Servo_angle[SERVO_TURN_LEFT];
-                    yaw_deg = 0.0f;        // reset yaw so we measure from here
-                    tick_counter = 0;
-                    state = TURN_TO_EXIT;  // new state!
-                    uart_print("State: TURN_TO_EXIT\r\n");
+                    yaw_deg = 0.0f;
+                    state = TURN_TO_EXIT;
+                    uart_print("EXIT LEFT\r\n");
+                    break;
+                }
+                else if (ir_right < IR_LEFT_GAP_THRESHOLD) {
+                    exit_dir = +1;   // RIGHT EXIT
+                    OCR0B = THRUST_SLOW;
+                    yaw_deg = 0.0f;
+                    state = TURN_TO_EXIT;
+                    uart_print("EXIT RIGHT\r\n");
                     break;
                 }
  
-                /* Bar detected overhead → stop and pause */
-                if (ir_bar > BAR_THRESHOLD) {
+                // Bar detected overhead → stop and pause 
+                if (ir_bar < BAR_THRESHOLD) {
                     OCR0B = THRUST_OFF;
                     tick_counter = 0;
                     state = BAR_DETECTED;
@@ -558,22 +559,25 @@ void loop() {
  
                 /* Wall close ahead → decide which turn comes next.
                    Exit approach triggers earlier than turns. */
-                {
-                uint16_t wall_threshold = WALL_NEAR;
-                    if (us_dist < wall_threshold && us_dist > 0) {
+                
+                    if (us_dist < WALL_NEAR && us_dist > 0) {
                         OCR0B = THRUST_SLOW;
-                        tick_counter = 0;
-                        if      (turn_count == 0) state = TURN_RIGHT;
-                        else if (turn_count == 1) state = TURN_LEFT;
-                        else if (turn_count == 2) state = TURN_RIGHT;
-                        else                      state = TURN_TO_EXIT;
-                        turn_count++;
-                        uart_print("State: TURN or APPROACH\r\n");
-                    }
-                }
-                    break;
- 
-            /* ---------------------------------------------------------- */
+                        yaw_deg = 0.0f;
+
+                        if (ir_left > ir_right) {
+                            state = TURN_LEFT;   // more space on LEFT
+                            uart_print("TURN LEFT\r\n");
+                        } else {
+                            state = TURN_RIGHT;  // more space on RIGHT
+                            uart_print("TURN RIGHT\r\n");
+                        }
+                        turn_count++;                  
+                        break;
+                        }
+
+                break;
+                
+
             case BAR_DETECTED:
             /* Pause under bar for BAR_PAUSE_TICKS, then resume forward. */
                 tick_counter++;
@@ -585,8 +589,7 @@ void loop() {
                     uart_print("State: FORWARD (after bar)\r\n");
                 }
                 break;
- 
-            /* ---------------------------------------------------------- */
+
             case TURN_RIGHT:
             // Turn right until IMU says we've rotated ~180 degrees
                 OCR0B = THRUST_SLOW;
@@ -600,7 +603,6 @@ void loop() {
                 }
                 break;
  
-            /* ---------------------------------------------------------- */
             case TURN_LEFT:
             /* Same as TURN_RIGHT but other direction. */
                 OCR0B = THRUST_SLOW;
@@ -614,12 +616,16 @@ void loop() {
                 }
                 break;
 
-            /* ---------------------------------------------------------- */
             case TURN_TO_EXIT:
-            /* Turn left until IMU says 90 degrees, then drive straight out */
                 OCR0B = THRUST_SLOW;
-                OCR1A = Servo_angle[SERVO_TURN_LEFT];
-                if (fabsf(yaw_deg) >= 85.0f) {   // 85 not 90 to account for overshoot
+
+                if (exit_dir == -1) {
+                    OCR1A = Servo_angle[SERVO_TURN_LEFT];
+                } else {
+                    OCR1A = Servo_angle[SERVO_TURN_RIGHT];
+                }
+
+                if (fabsf(yaw_deg) >= 85.0f) {
                     OCR1A = Servo_angle[SERVO_CENTER];
                     yaw_deg = 0.0f;
                     state = EXIT;
@@ -627,29 +633,34 @@ void loop() {
                 }
                 break;
  
-            /* ---------------------------------------------------------- */
             case EXIT:
             /* Left gap detected in FORWARD, servo already steering left.
             Just keep going until off the course. */
                 OCR0B = THRUST_CRUISE;
                 break;
  
-        } /* end switch */
+        } // end of states
+
+
+        
  
-        /* ---- Debug output — once per second (every 50 ticks at 50Hz) ----
-           Uncomment #define DEBUG at the top to enable. */
+        // Debug output 
+        
         #ifdef DEBUG
         static uint8_t debug_tick = 0;
         debug_tick++;
-        if (debug_tick >= 50) {
-            debug_tick = 0;
-            uart_print("IrL="); uart_print_int(ir_left);
-            uart_print("IrB="); uart_print_int(ir_bar);
-            uart_print("IrR="); uart_print_int(ir_right);
-            uart_print("US=");  uart_print_int(us_dist);
-            uart_print_float(" Yaw=", yaw_deg);
-            uart_print("\r\n");
-        }
+
+        if (debug_tick >= 100) {
+    debug_tick = 0;
+    uart_print("State="); uart_print_int(state);
+    uart_print("Turns="); uart_print_int(turn_count);
+    uart_print("IrL_cm="); uart_print_int(ir_to_cm(ir_left)-5);
+    uart_print("IrR_cm="); uart_print_int(ir_to_cm(ir_right)-5);
+    uart_print("US=");  uart_print_int(us_dist);
+    uart_print_float(" Yaw=", yaw_deg);
+    uart_print("\r\n");
+}
+
         #endif
  
     } /* end while(1) */
