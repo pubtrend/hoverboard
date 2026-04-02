@@ -23,11 +23,11 @@ IMU: P7/P19
 //
 
 /* Lift fan — OCR0A, range 0-255. */
-#define LIFT_SPEED              180
+#define LIFT_SPEED              255
  
 /* Thrust fan — OCR0B, range 0-255. */
-#define THRUST_CRUISE           120
-#define THRUST_SLOW             70
+#define THRUST_CRUISE           155
+#define THRUST_SLOW             0
 #define THRUST_OFF              0
  
 /* Servo index - goes into Servo_angle[].
@@ -40,10 +40,10 @@ IMU: P7/P19
 #define IR_CENTER_GAIN          4
 
 /* Left wall disappears = exit gap found. */
-#define IR_LEFT_GAP_THRESHOLD   150
+#define IR_LEFT_GAP_THRESHOLD   20
  
 /* Bar detection — IR sensor overhead. */
-#define BAR_THRESHOLD           180
+#define BAR_THRESHOLD           30
  
 /* Front wall detection — US sensor pulse count. CALIBRATE. */
 #define WALL_NEAR               30
@@ -505,6 +505,7 @@ void loop() {
 
             case LAUNCH:
             /* Wait 1.5 seconds after lift to thrust */
+                uart_print("State: LAUNCH\r\n");
                 OCR0A = LIFT_SPEED;
                 OCR0B = THRUST_OFF;
                 OCR1A = Servo_angle[SERVO_CENTER];
@@ -549,7 +550,7 @@ void loop() {
                 }
  
                 // Bar detected overhead → stop and pause 
-                if (ir_bar < BAR_THRESHOLD) {
+                if (ir_bar > BAR_THRESHOLD) {
                     OCR0B = THRUST_OFF;
                     tick_counter = 0;
                     state = BAR_DETECTED;
@@ -650,14 +651,19 @@ void loop() {
         static uint8_t debug_tick = 0;
         debug_tick++;
 
-        if (debug_tick >= 100) {
+        if (debug_tick >= 200) {
     debug_tick = 0;
+    uart_print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+    uart_print("\r\n");
     uart_print("State="); uart_print_int(state);
     uart_print("Turns="); uart_print_int(turn_count);
+    uart_print("IrBar="); uart_print_int(ir_bar);
     uart_print("IrL_cm="); uart_print_int(ir_to_cm(ir_left)-5);
     uart_print("IrR_cm="); uart_print_int(ir_to_cm(ir_right)-5);
     uart_print("US=");  uart_print_int(us_dist);
     uart_print_float(" Yaw=", yaw_deg);
+    uart_print("\r\n");
+    uart_print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
     uart_print("\r\n");
 }
 
